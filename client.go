@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	keyPinBCM           = 07
-	keyPinNumber        = 26
-	spkrPinBCM          = 10
-	spkrPinNumber       = 19
+	keyPinBCM           = 22
+	spkrPinBCM          = 17
+	ledPinRedBCM	    = 20
+	// ledPinGreenBCM	    = 16
+	// ledPinBlueBCM	    = 21
 	state               = "idle"
 	queue               []string
 	outQueue            []string
@@ -25,7 +26,7 @@ var (
 	lastKeyId           string          // identifier for the telegraph that the current queue came from
 	lastKeyVal          = "0"
 	gpio                bool
-	t                   tone
+	n                   notification
 	pingInterval        int64 = 30000 // Interval between test pings to the server (milliseconds)
 	pingTimeout         int64 = 5000  // How long to wait after sending a ping before reporting an error (milliseconds)
 	pingTimer           int64
@@ -51,16 +52,17 @@ type morseKey struct {
 	keyPin                                 rpio.Pin
 }
 
-type tone struct {
+type notification struct {
 	state   string
 	spkrPin rpio.Pin
+	ledPin rpio.Pin
 }
 
 func (sc *socketClient) dial(firstDial bool) {
 
-	fmt.Println("Dialing 'ws://" + sc.ip + ":" + sc.port + "/channel/" + sc.channel)
+	fmt.Println("Dialing 'ws://" + sc.ip + ":" + sc.port + "/channel/" + sc.channel + "'")
 
-	sc.status = "dialling"
+	sc.status = "dialing"
 	conn, err := websocket.Dial("ws://"+sc.ip+":"+sc.port+"/channel/"+sc.channel, "", "http://localhost")
 	if err == nil {
 		sc.conn = conn
@@ -86,63 +88,49 @@ func (sc *socketClient) dial(firstDial bool) {
 
 }
 
-func (t *tone) set(value int) {
+func (n *notification) set(value int) {
 	if gpio == true {
 		if value == 0 {
-			t.spkrPin.Write(rpio.Low)
-			t.state = "OFF"
+			n.spkrPin.Write(rpio.Low)
+			n.ledPin.Write(rpio.Low)
+			n.state = "OFF"
 
 		} else if value == 1 {
-			t.spkrPin.Write(rpio.High)
-			t.state = "ON"
+			n.spkrPin.Write(rpio.High)
+			n.ledPin.Write(rpio.High)
+			n.state = "ON"
 		} else {
-			fmt.Print("Err! Couldn’t set tone to: ")
+			fmt.Print("Err! Couldn't set notification to: ")
 			fmt.Println(value)
 		}
 	} else {
 		if value == 0 {
 			// need to figure out the best way to generate + play a tone
-			t.state = "OFF"
+			n.state = "OFF"
 		} else if value == 1 {
 			// need to figure out the best way to generate + play a tone
-			t.state = "ON"
+			n.state = "ON"
 		} else {
-			fmt.Println("Err! Couldn’t set tone")
+			fmt.Println("Err! Couldn't set notification")
 		}
 	}
 }
 
-func (t *tone) start() {
+func (n *notification) start() {
 	if gpio == true {
-		t.spkrPin.Write(rpio.High)
-	} else {
-		// TODO: cross-platform way generate and play tone
+		n.spkrPin.Write(rpio.High)
+		n.ledPin.Write(rpio.High)
 	}
-	t.state = "ON"
+	n.state = "ON"
 
-	// This makes a very bad tone with a piezo buzzer.
-	// go func() {
-	// 	for {
-	// 		select {
-	// 		case <-stopPWM:
-	// 			return
-	// 		default:
-	// 			t.spkrPin.Write(rpio.High)
-	// 			time.Sleep(250 * time.Microsecond)
-	// 			t.spkrPin.Write(rpio.Low)
-	// 			time.Sleep(250 * time.Microsecond)
-	// 		}
-	// 	}
-	// }()
 }
 
-func (t *tone) stop() {
+func (n *notification) stop() {
 	if gpio == true {
-		t.spkrPin.Write(rpio.Low)
-	} else {
-		// TODO: cross-platform generate and play tone
+		n.spkrPin.Write(rpio.Low)
+		n.ledPin.Write(rpio.Low)
 	}
-	t.state = "OFF"
+	n.state = "OFF"
 }
 
 func playMorse(message string) {
@@ -150,14 +138,14 @@ func playMorse(message string) {
 	for i := 0; i < len(message); i++ {
 		switch message[i] {
 		case 46: // == "."
-			t.start()
+			n.start()
 			time.Sleep(speed * time.Millisecond)
-			t.stop()
+			n.stop()
 			time.Sleep(speed * time.Millisecond)
 		case 45: // == "-"
-			t.start()
+			n.start()
 			time.Sleep(3 * speed * time.Millisecond)
-			t.stop()
+			n.stop()
 			time.Sleep(speed * time.Millisecond)
 		case 32: // == " "
 			time.Sleep(3 * speed * time.Millisecond)
@@ -297,7 +285,7 @@ func main() {
 	// Initialize morse key
 	key := morseKey{lastState: 1, lastDur: 0, lastStart: 0, lastEnd: 0}
 
-	t = tone{state: "OFF"}
+	n = notification{state: "OFF"}
 
 	if gpio == true {
 		// Setup GPIO
@@ -309,7 +297,10 @@ func main() {
 		keyPn.Input()
 		spkrPn := rpio.Pin(spkrPinBCM)
 		spkrPn.Output()
-		t.spkrPin = spkrPn
+		ledPn := rpio.Pin(ledPinRedBCM)
+		ledPn.Output()
+		n.spkrPin = spkrPn
+		n.ledPin = ledPn
 		key.keyPin = keyPn
 
 		defer rpio.Close()
@@ -392,7 +383,7 @@ func main() {
 				fmt.Print(" → ")
 				fmt.Println(keyVal)
 				toneVal, _ := strconv.Atoi(keyVal)
-				t.set(toneVal)
+				n.set(toneVal)
 				timestamp := strconv.FormatInt(microseconds(), 10)
 				msg := keyVal + timestamp + "v2"
 				outQueue = append(outQueue, msg)
@@ -413,7 +404,7 @@ func main() {
 				msgValue, _ := strconv.Atoi(m[:1])
 
 				queue = append(queue[:0], queue[0+1:]...) // Pop message out of queue
-				t.set(msgValue)
+				n.set(msgValue)
 
 			}
 		}
